@@ -67,6 +67,51 @@ async def test_lmstudio_handles_malformed_model_list() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_lmstudio_retries_without_response_format_after_bad_request() -> None:
+    route = respx.post("http://localhost:1234/v1/chat/completions").mock(
+        side_effect=[
+            Response(400, json={"error": "unsupported response_format"}),
+            Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": (
+                                    '{"should_rename": false, "suggested_name": null, '
+                                    '"confidence": 0.6, "reason": "Already clean"}'
+                                )
+                            }
+                        }
+                    ]
+                },
+            ),
+        ]
+    )
+    provider = LMStudioProvider(LMStudioConfig(model="test-model"))
+
+    suggestion = await provider.suggest_name("Robin Hood - 2026", "movie")
+
+    assert suggestion.should_rename is False
+    assert route.call_count == 2
+    assert "response_format" in route.calls[0].request.content.decode()
+    assert "response_format" not in route.calls[1].request.content.decode()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_lmstudio_includes_http_error_response_body() -> None:
+    respx.post("http://localhost:1234/v1/chat/completions").mock(
+        return_value=Response(404, json={"error": "model not found"})
+    )
+    provider = LMStudioProvider(LMStudioConfig(model="test-model"))
+
+    with pytest.raises(ProviderError, match="model not found"):
+        await provider.suggest_name("bad", "movie")
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_lmstudio_handles_malformed_response() -> None:
     respx.post("http://localhost:1234/v1/chat/completions").mock(
         return_value=Response(200, json={"choices": [{"message": {"content": "not json"}}]})

@@ -25,6 +25,14 @@ class LMStudioProvider:
         self.config = config
         self.model = config.model
 
+    @staticmethod
+    def _error_detail(response: httpx.Response) -> str:
+        try:
+            detail = response.json()
+        except json.JSONDecodeError:
+            detail = response.text
+        return str(detail).strip()
+
     async def list_models(self) -> list[str]:
         headers = {}
         if self.config.api_key:
@@ -59,7 +67,7 @@ class LMStudioProvider:
         if self.config.api_key:
             headers["Authorization"] = f"Bearer {self.config.api_key}"
 
-        payload = {
+        payload: dict[str, object] = {
             "model": self.config.model,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -76,9 +84,19 @@ class LMStudioProvider:
                 headers=headers,
             ) as client:
                 response = await client.post("/chat/completions", json=payload)
+                if response.status_code == 400:
+                    fallback_payload = dict(payload)
+                    fallback_payload.pop("response_format", None)
+                    response = await client.post("/chat/completions", json=fallback_payload)
                 response.raise_for_status()
         except httpx.TimeoutException as exc:
             raise ProviderError("LM Studio request timed out") from exc
+        except httpx.HTTPStatusError as exc:
+            detail = self._error_detail(exc.response)
+            message = f"LM Studio request failed: {exc}"
+            if detail:
+                message = f"{message}; response: {detail}"
+            raise ProviderError(message) from exc
         except httpx.HTTPError as exc:
             raise ProviderError(f"LM Studio request failed: {exc}") from exc
 
