@@ -1,11 +1,24 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal
 from textual.screen import Screen
-from textual.widgets import Button, DataTable, Footer, Header, Input, Label, Select, Static
+from textual.worker import Worker, WorkerState
+from textual.widgets import (
+    Button,
+    DataTable,
+    DirectoryTree,
+    Footer,
+    Header,
+    Input,
+    Label,
+    ProgressBar,
+    Select,
+    Static,
+)
 
 from media_folder_repair.config import AppConfig, load_config, save_config
 from media_folder_repair.models import CollisionPolicy, RenameMode
@@ -21,16 +34,28 @@ class MountPathScreen(Screen[Path]):
         with Container(id="mount-path"):
             yield Label("Mounted path")
             yield Input(placeholder="/Volumes/Media", id="path")
+            yield Button("Browse", id="browse")
+            yield DirectoryTree(str(Path.home()), id="folder-browser")
             yield Static("", id="error")
             yield Button("Continue", id="continue", variant="primary")
         yield Footer()
 
     def on_mount(self) -> None:
         self.query_one("#path", Input).focus()
+        self.query_one("#folder-browser", DirectoryTree).display = False
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "continue":
             self._submit_path()
+        elif event.button.id == "browse":
+            browser = self.query_one("#folder-browser", DirectoryTree)
+            browser.display = not browser.display
+
+    def on_directory_tree_directory_selected(
+        self, event: DirectoryTree.DirectorySelected
+    ) -> None:
+        self.query_one("#path", Input).value = str(event.path)
+        self.query_one("#error", Static).update("")
 
     def on_input_submitted(self, _: Input.Submitted) -> None:
         self._submit_path()
@@ -178,10 +203,12 @@ class RepairScreen(Screen[None]):
         super().__init__()
         self.mounted_path = mounted_path
         self.config = config
+        self.scan_worker: Worker | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield Static("Ready to scan.", id="status")
+        yield ProgressBar(total=1, show_eta=False, id="scan-progress")
         table = DataTable(id="results")
         table.add_columns("Status", "Folder", "Target", "Confidence", "Reason")
         yield table
@@ -194,19 +221,45 @@ class RepairScreen(Screen[None]):
         if event.button.id == "back":
             self.dismiss(None)
         elif event.button.id == "start":
-            self.run_worker(self._run_scan(), exclusive=True)
+            if self.scan_worker and self.scan_worker.state in {
+                WorkerState.PENDING,
+                WorkerState.RUNNING,
+            }:
+                self.scan_worker.cancel()
+                self.query_one("#status", Static).update("Canceling scan...")
+                return
+            self.scan_worker = self.run_worker(self._run_scan(), exclusive=True)
 
     async def _run_scan(self) -> None:
-        self.query_one("#status", Static).update("Scanning folders and asking LM Studio...")
-        table = self.query_one("#results", DataTable)
-        table.clear()
-        provider = LMStudioProvider(self.config.lmstudio)
-        service = RenameService(self.config, provider)
+        start_button = self.query_one("#start", Button)
+        start_button.label = "Cancel Scan"
+        start_button.variant = "error"
         try:
-            result = await service.run(self.mounted_path)
+            self.query_one("#status", Static).update("Scanning folders and asking LM Studio...")
+            progress = self.query_one("#scan-progress", ProgressBar)
+            progress.update(total=1, progress=0)
+            table = self.query_one("#results", DataTable)
+            table.clear()
+            provider = LMStudioProvider(self.config.lmstudio)
+            service = RenameService(self.config, provider)
+
+            async def update_progress(completed: int, total: int, folder: Path) -> None:
+                progress.update(total=max(total, 1), progress=completed)
+                self.query_one("#status", Static).update(
+                    f"Scanning {completed}/{total}: {folder.relative_to(self.mounted_path)}"
+                )
+
+            result = await service.run(self.mounted_path, progress_callback=update_progress)
+        except asyncio.CancelledError:
+            self.query_one("#status", Static).update("Scan canceled.")
+            raise
         except Exception as exc:  # Textual status surface, detailed behavior is tested below.
             self.query_one("#status", Static).update(f"Scan failed: {exc}")
             return
+        finally:
+            start_button.label = "Start Scan"
+            start_button.variant = "primary"
+            self.scan_worker = None
 
         rows = result.applied + result.queued + result.skipped
         for item in rows:

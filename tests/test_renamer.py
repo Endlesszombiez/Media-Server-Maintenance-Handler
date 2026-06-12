@@ -100,6 +100,34 @@ async def test_preview_mode_creates_proposals_without_renaming(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_run_reports_scan_progress_per_folder(tmp_path: Path) -> None:
+    first = tmp_path / "First.Movie.2026.1080p"
+    second = tmp_path / "Second.Movie.2026.1080p"
+    first.mkdir()
+    second.mkdir()
+    config = AppConfig()
+    service = RenameService(
+        config,
+        FakeProvider(
+            {
+                first.name: suggestion("First Movie - 2026"),
+                second.name: suggestion("Second Movie - 2026"),
+            }
+        ),
+        HistoryLog(tmp_path / "history.jsonl"),
+    )
+    progress: list[tuple[int, int, Path]] = []
+
+    await service.run(
+        tmp_path,
+        progress_callback=lambda done, total, path: progress.append((done, total, path)),
+    )
+
+    assert [(done, total) for done, total, _ in progress] == [(1, 2), (2, 2)]
+    assert {path for _, _, path in progress} == {first, second}
+
+
+@pytest.mark.asyncio
 async def test_auto_mode_applies_only_valid_proposals(tmp_path: Path) -> None:
     good = tmp_path / "Good.Movie.2026.1080p"
     bad = tmp_path / "Bad.Movie.2026.1080p"

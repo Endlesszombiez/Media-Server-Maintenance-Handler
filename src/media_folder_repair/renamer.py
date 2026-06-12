@@ -22,6 +22,7 @@ from media_folder_repair.providers.base import FolderNameProvider, ProviderError
 from media_folder_repair.scanner import iter_folders
 
 ManualNameChooser = Callable[[RenameProposal], Awaitable[str | None] | str | None]
+ProgressCallback = Callable[[int, int, Path], Awaitable[None] | None]
 
 RESERVED_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -82,12 +83,18 @@ class RenameService:
         self.history = history or HistoryLog()
         self.manual_name_chooser = manual_name_chooser
 
-    async def collect_proposals(self, mounted_path: Path) -> tuple[list[RenameProposal], list[RenameResult]]:
+    async def collect_proposals(
+        self,
+        mounted_path: Path,
+        progress_callback: ProgressCallback | None = None,
+    ) -> tuple[list[RenameProposal], list[RenameResult]]:
         proposals: list[RenameProposal] = []
         skipped: list[RenameResult] = []
         profile_name = self.config.profile.default
         prompt = self.config.profile_prompt(profile_name)
-        for folder in iter_folders(mounted_path, self.config.scan):
+        progress = progress_callback or _noop_progress
+        folders = iter_folders(mounted_path, self.config.scan)
+        for index, folder in enumerate(folders, start=1):
             try:
                 suggestion = await self.provider.suggest_name(folder.name, prompt)
             except ProviderError as exc:
@@ -108,12 +115,17 @@ class RenameService:
                 )
             else:
                 proposals.append(proposal)
+            await _maybe_await(progress(index, len(folders), folder))
         return proposals, skipped
 
-    async def run(self, mounted_path: Path) -> RepairRunResult:
+    async def run(
+        self,
+        mounted_path: Path,
+        progress_callback: ProgressCallback | None = None,
+    ) -> RepairRunResult:
         run_id = str(uuid.uuid4())
         mounted = mounted_path.expanduser().resolve()
-        proposals, skipped = await self.collect_proposals(mounted)
+        proposals, skipped = await self.collect_proposals(mounted, progress_callback)
 
         if self.config.rename.mode == RenameMode.PREVIEW:
             queued = [
@@ -231,3 +243,7 @@ async def _maybe_await(value):
     if asyncio.iscoroutine(value):
         return await value
     return value
+
+
+def _noop_progress(_: int, __: int, ___: Path) -> None:
+    return None

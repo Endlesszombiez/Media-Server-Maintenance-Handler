@@ -10,7 +10,7 @@ Recursively scans folders under the selected mounted path, asks LM Studio for cl
 
 The current workflow supports:
 
-- Mounted path selection at app start.
+- Mounted path selection at app start, with typing or an interactive folder browser.
 - Main menu navigation with arrow keys, Enter, and shortcuts.
 - LM Studio through its OpenAI-compatible API.
 - Naming profiles for movie, TV, music, and generic folders.
@@ -18,6 +18,7 @@ The current workflow supports:
 - Collision policies: `skip_and_report` and `prompt_each_time`.
 - JSONL history logging for every successful rename.
 - Safety validation before any filesystem rename.
+- Scan progress tracking while each folder is processed.
 
 ## Planned Tool Areas
 
@@ -40,15 +41,27 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]"
 ```
 
+Or use the included installer:
+
+```bash
+./install.sh
+```
+
 Launch the app:
 
 ```bash
 .venv/bin/media-sm
 ```
 
+Or use the included launcher:
+
+```bash
+./run.sh
+```
+
 ## App Flow
 
-On launch, `media-sm` asks for a mounted working path. The app validates that the path exists and is a directory, then opens the main menu.
+On launch, `media-sm` asks for a mounted working path. You can type the path manually or use `Browse` to select a folder. The app validates that the path exists and is a directory, then opens the main menu.
 
 Current menu:
 
