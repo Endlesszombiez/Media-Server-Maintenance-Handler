@@ -84,7 +84,15 @@ class ConfigScreen(Screen[AppConfig]):
             yield Label("API key")
             yield Input(value=self.config.lmstudio.api_key or "", password=True, id="api_key")
             yield Label("Model")
-            yield Input(value=self.config.lmstudio.model, id="model")
+            model_options = (
+                [(self.config.lmstudio.model, self.config.lmstudio.model)]
+                if self.config.lmstudio.model
+                else [("Refresh models from LM Studio", "")]
+            )
+            with Horizontal():
+                yield Select(model_options, value=self.config.lmstudio.model, id="model")
+                yield Button("Refresh Models", id="refresh_models")
+            yield Static("", id="model_status")
             yield Label("Rename mode")
             yield Select(
                 [(mode.value, mode.value) for mode in RenameMode],
@@ -108,15 +116,25 @@ class ConfigScreen(Screen[AppConfig]):
                 yield Button("Cancel", id="cancel")
         yield Footer()
 
+    def on_mount(self) -> None:
+        self.run_worker(self._refresh_models(), exclusive=False)
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "cancel":
             self.dismiss(self.config)
+            return
+        if event.button.id == "refresh_models":
+            self.run_worker(self._refresh_models(), exclusive=False)
             return
         if event.button.id == "save":
             self.config.lmstudio.base_url = self.query_one("#base_url", Input).value
             api_key = self.query_one("#api_key", Input).value.strip()
             self.config.lmstudio.api_key = api_key or None
-            self.config.lmstudio.model = self.query_one("#model", Input).value.strip()
+            model = self.query_one("#model", Select).value
+            self.config.lmstudio.model = "" if model is None else str(model).strip()
+            if not self.config.lmstudio.model:
+                self.query_one("#model_status", Static).update("Choose an LM Studio model before saving.")
+                return
             self.config.rename.mode = RenameMode(self.query_one("#mode", Select).value)
             self.config.rename.collision_policy = CollisionPolicy(
                 self.query_one("#collision", Select).value
@@ -124,6 +142,33 @@ class ConfigScreen(Screen[AppConfig]):
             self.config.profile.default = str(self.query_one("#profile", Select).value)
             save_config(self.config)
             self.dismiss(self.config)
+
+    async def _refresh_models(self) -> None:
+        status = self.query_one("#model_status", Static)
+        status.update("Loading LM Studio models...")
+
+        config = self.config.lmstudio.model_copy()
+        config.base_url = self.query_one("#base_url", Input).value.strip()
+        api_key = self.query_one("#api_key", Input).value.strip()
+        config.api_key = api_key or None
+
+        try:
+            models = await LMStudioProvider(config).list_models()
+        except Exception as exc:
+            status.update(f"Could not load LM Studio models: {exc}")
+            return
+
+        if not models:
+            status.update("LM Studio did not report any loaded models.")
+            return
+
+        current = str(self.query_one("#model", Select).value or self.config.lmstudio.model)
+        if current and current not in models:
+            models.insert(0, current)
+        selected = current if current in models else models[0]
+        self.query_one("#model", Select).set_options([(model, model) for model in models])
+        self.query_one("#model", Select).value = selected
+        status.update(f"Loaded {len(models)} LM Studio model(s).")
 
 
 class RepairScreen(Screen[None]):

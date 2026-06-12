@@ -25,6 +25,32 @@ class LMStudioProvider:
         self.config = config
         self.model = config.model
 
+    async def list_models(self) -> list[str]:
+        headers = {}
+        if self.config.api_key:
+            headers["Authorization"] = f"Bearer {self.config.api_key}"
+
+        try:
+            async with httpx.AsyncClient(
+                base_url=self.config.base_url,
+                timeout=self.config.timeout_seconds,
+                headers=headers,
+            ) as client:
+                response = await client.get("/models")
+                response.raise_for_status()
+        except httpx.TimeoutException as exc:
+            raise ProviderError("LM Studio model list request timed out") from exc
+        except httpx.HTTPError as exc:
+            raise ProviderError(f"LM Studio model list request failed: {exc}") from exc
+
+        try:
+            data = response.json()["data"]
+            models = [item["id"] for item in data if isinstance(item.get("id"), str)]
+        except (KeyError, TypeError) as exc:
+            raise ProviderError("LM Studio returned malformed model list") from exc
+
+        return sorted(models)
+
     async def suggest_name(self, folder_name: str, profile_prompt: str) -> ProviderSuggestion:
         if not self.config.model:
             raise ProviderError("LM Studio model is not configured")

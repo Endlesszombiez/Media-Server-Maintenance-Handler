@@ -38,6 +38,35 @@ async def test_lmstudio_parses_valid_structured_json() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_lmstudio_lists_available_models() -> None:
+    respx.get("http://localhost:1234/v1/models").mock(
+        return_value=Response(
+            200,
+            json={
+                "data": [
+                    {"id": "second-model"},
+                    {"id": "first-model"},
+                ]
+            },
+        )
+    )
+    provider = LMStudioProvider(LMStudioConfig())
+
+    assert await provider.list_models() == ["first-model", "second-model"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_lmstudio_handles_malformed_model_list() -> None:
+    respx.get("http://localhost:1234/v1/models").mock(return_value=Response(200, json={}))
+    provider = LMStudioProvider(LMStudioConfig())
+
+    with pytest.raises(ProviderError, match="model list"):
+        await provider.list_models()
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_lmstudio_handles_malformed_response() -> None:
     respx.post("http://localhost:1234/v1/chat/completions").mock(
         return_value=Response(200, json={"choices": [{"message": {"content": "not json"}}]})

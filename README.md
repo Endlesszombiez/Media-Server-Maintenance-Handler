@@ -75,7 +75,7 @@ Current fields include:
 - `provider`: defaults to `lmstudio`
 - `lmstudio.base_url`: defaults to `http://localhost:1234/v1`
 - `lmstudio.api_key`: optional
-- `lmstudio.model`: LM Studio model name
+- `lmstudio.model`: selected LM Studio model id, populated from LM Studio's `/v1/models` endpoint in the Config screen
 - `lmstudio.timeout_seconds`: request timeout
 - `rename.mode`: `preview`, `auto`, or `hybrid`
 - `rename.collision_policy`: `skip_and_report` or `prompt_each_time`
