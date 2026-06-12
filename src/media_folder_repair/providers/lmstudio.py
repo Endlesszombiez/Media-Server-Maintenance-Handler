@@ -1,0 +1,71 @@
+from __future__ import annotations
+
+import json
+
+import httpx
+from pydantic import BaseModel, Field, ValidationError
+
+from media_folder_repair.config import LMStudioConfig
+from media_folder_repair.models import ProviderSuggestion
+from media_folder_repair.profiles import SYSTEM_PROMPT, build_prompt
+from media_folder_repair.providers.base import ProviderError
+
+
+class _SuggestionPayload(BaseModel):
+    should_rename: bool
+    suggested_name: str | None = None
+    confidence: float = Field(ge=0, le=1)
+    reason: str
+
+
+class LMStudioProvider:
+    name = "lmstudio"
+
+    def __init__(self, config: LMStudioConfig):
+        self.config = config
+        self.model = config.model
+
+    async def suggest_name(self, folder_name: str, profile_prompt: str) -> ProviderSuggestion:
+        if not self.config.model:
+            raise ProviderError("LM Studio model is not configured")
+
+        headers = {}
+        if self.config.api_key:
+            headers["Authorization"] = f"Bearer {self.config.api_key}"
+
+        payload = {
+            "model": self.config.model,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": build_prompt(folder_name, profile_prompt)},
+            ],
+            "temperature": 0.1,
+            "response_format": {"type": "json_object"},
+        }
+
+        try:
+            async with httpx.AsyncClient(
+                base_url=self.config.base_url,
+                timeout=self.config.timeout_seconds,
+                headers=headers,
+            ) as client:
+                response = await client.post("/chat/completions", json=payload)
+                response.raise_for_status()
+        except httpx.TimeoutException as exc:
+            raise ProviderError("LM Studio request timed out") from exc
+        except httpx.HTTPError as exc:
+            raise ProviderError(f"LM Studio request failed: {exc}") from exc
+
+        try:
+            content = response.json()["choices"][0]["message"]["content"]
+            raw = json.loads(content) if isinstance(content, str) else content
+            parsed = _SuggestionPayload.model_validate(raw)
+        except (KeyError, IndexError, json.JSONDecodeError, TypeError, ValidationError) as exc:
+            raise ProviderError("LM Studio returned malformed structured JSON") from exc
+
+        return ProviderSuggestion(
+            should_rename=parsed.should_rename,
+            suggested_name=parsed.suggested_name,
+            confidence=parsed.confidence,
+            reason=parsed.reason,
+        )
